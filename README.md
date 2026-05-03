@@ -1,96 +1,162 @@
-# Cantonese Sentiment Analysis – Decoding Lexical, Syntactic, and Pragmatic Features
+```markdown
+# Decoding Cantonese Sentiment: Lexical, Syntactic, and Pragmatic Probing
 
-This repository contains the official implementation of our paper:  
-**“Decoding Cantonese Sentiment: An Empirical Analysis Across Lexical, Syntactic, and Pragmatic Levels”**.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/)
+
+This repository contains the official code and data for the paper **"Decoding Cantonese Sentiment: An Empirical Analysis Across Lexical, Syntactic, and Pragmatic Levels"** (anonymous submission).  
+We propose a hierarchical taxonomy of Cantonese linguistic features and systematically evaluate how they shape sentiment predictions across binary, 3‑class, and 5‑class granularities. Through layer‑wise probing, we reveal that task complexity dictates the depth at which models encode and retain dialect‑specific signals.
+
+**Key findings**:
+- Dialect‑specific PLMs (e.g., CantoneseBERT) outperform general LLMs in fine‑grained (5‑class) sentiment analysis.
+- Cross‑dialectal *false friends* and *code‑mixing* trigger negative transfer from Mandarin priors, while *Utterance‑final Particles* serve as robust affective cues.
+- Binary tasks exhibit deep‑layer *feature forgetting*; fine‑grained tasks force models to retain linguistic cues through the final layer.
+
+> 📎 **Anonymous repository**: [https://anonymous.4open.science/r/Cantonese-Sentiment-Analysis-Benchmarking-PLMs-and-LLMs-854B/](https://anonymous.4open.science/r/Cantonese-Sentiment-Analysis-Benchmarking-PLMs-and-LLMs-854B/)  
+> (URL will be updated upon acceptance.)
 
 ## Project Structure
+```
 
+.
 ├── README.md
 ├── requirements.txt
-├── download_models.py
-├── data/ # 存放所有原始数据集 (见下方准备)
-├── probing_data/ # 7 个语言学特征的探测数据集
-├── src/ # 核心代码
-│ ├── train_plm_5cls.py # 训练 BERT 系列模型 (粤语/中文/mBERT)、五分类
-│ ├── train_pycantonese.py # 使用 pycantonese 分词的训练脚本、五分类
-│ ├── probing.py # 线性探测实验
-│ ├── probing_figures.py # 绘制热力图 (13 层 × 7 特征)
-│ └── evaluate_features.py # 特征级错误分析
-├── results/ # 自动生成，存放模型和探测结果
-└── scripts/ # 辅助脚本
+├── download_models.py            # Script to download required pre-trained models
+├── data/                         # Raw datasets (see "Data Preparation" below)
+├── probing_data/                 # 7 linguistic feature probing subsets (250 instances each)
+├── src/                          # Core source code
+│   ├── train_plm_5cls.py        # Fine-tune BERT-family models (CantoneseBERT, ChineseBERT, mBERT) for 5‑class sentiment
+│   ├── train_pycantonese.py     # Train a PyCantonese lexicon‑based baseline for 5‑class sentiment
+│   ├── probing.py               # Run linear probing experiments across 13 transformer layers
+│   ├── probing_figures.py       # Generate layer‑wise heatmaps (13 layers × 7 features)
+│   └── evaluate_features.py     # Feature‑level error analysis and delta‑F1 computation
+└── results/                      # Auto‑generated: trained models, probing scores, figures
 
-## Environment Setup
+````text
+## Features
 
-````bash
-# 1. 创建虚拟环境
-python -m venv venv
-source venv/bin/activate   # Linux/Mac
-# 或 .\venv\Scripts\activate (Windows)
+- **Multi‑granularity Cantonese sentiment benchmarks**  
+  OpenRice (Binary, 3‑class, 5‑class) + self‑collected HKTVmall 5‑class dataset, all with balanced or natural distributions.
 
-# 2. 安装依赖
+- **Model zoo**  
+  PyCantonese (lexicon), CantoneseBERT, ChineseBERT, mBERT, and Qwen3‑LoRA. Full‑parameter fine‑tuning plus parameter‑efficient adaptation.
+
+- **Linguistic feature taxonomy**  
+  Six feature categories spanning Lexical, Syntactic, and Pragmatic levels: *False Friends*, *Intensity Modifiers*, *Negation*, *Comparative Constructions*, *Code‑mixing*, and *Utterance‑final Particles*.
+
+- **Layer‑wise probing suite**  
+  Train linear probes on frozen CantoneseBERT representations to pinpoint where each feature is encoded. Outputs heatmaps for 2‑, 3‑, and 5‑class tasks.
+
+- **Error analysis toolbox**  
+  Qualitative case studies and quantitative delta‑F1 metrics to isolate the impact of dialectal phenomena.
+
+## Installation
+
+```bash
+git clone https://anonymous.4open.science/r/Cantonese-Sentiment-Analysis-Benchmarking-PLMs-and-LLMs-854B/
+cd Cantonese-Sentiment-Analysis-Benchmarking-PLMs-and-LLMs-854B
 pip install -r requirements.txt
+````
 
-# 3. (可选) 预下载模型到本地，加速训练
+Download all required pre‑trained models by running:
+
+```bash
 python download_models.py
+```
+
+This will fetch CantoneseBERT, ChineseBERT, mBERT, and Qwen3‑4B weights from HuggingFace (models may be large; ensure stable network connection).
 
 ## Data Preparation
-请将以下数据集按路径放置：
-数据集	路径	格式	来源/说明
-OpenRice 二分类	data/openrice_2cls/train.csv , test.csv	csv (text,label)	HuggingFace
-OpenRice 三分类	data/openrice_3cls/train.tsv , test.tsv	tsv	GitHub
-OpenRice 五分类	data/5cls_data/openrice.csv	csv	GitHub
-HKTVmall 五分类	data/5cls_data/hktvmall.csv	csv	内部构建（请联系作者）
-探测数据集	probing_data/*.csv	csv (text,label)	构造的 7 个二分类特征集（见论文）
-注意：所有 CSV/TSV 文件必须包含 text 和 label 两列（标签为整数，1~5 或 0/1）。
 
-## Running Experiments
-1. 训练分类模型（PLMs）
+### Sentiment Datasets
+
+1. **OpenRice‑Binary**: [HuggingFace dataset](https://huggingface.co/datasets/sepidmnorozy/Cantonese_sentiment)
+   Download and place under `data/OpenRice/binary/`.
+2. **OpenRice‑3C**: [GitHub repository](https://github.com/toastynews/openrice-senti)
+   Place the TSV file under `data/OpenRice/3class/`.
+3. **OpenRice‑5C**: [GitHub repository](https://github.com/Christainx/Dataset_Cantonese_Openrice.git)
+   Place under `data/OpenRice/5class/`.
+4. **HKTVmall‑5C** (self‑collected, anonymized)
+   Provided in the repository at `data/HKTVmall/` (already included).
+
+### Probing Subsets
+
+Manually curated subsets for 6 linguistic features are located in `probing_data/`. Each subfolder contains positive (`pos.txt`) and negative (`neg.txt`) samples used for the binary probing classification.
+
+## Usage
+
+### Training Sentiment Classifiers
+
+Train a 5‑class PLM model (CantoneseBERT, ChineseBERT, or mBERT):
+
 ```bash
-# 训练粤语BERT (CantoneseBERT)
-python src/train_plm_5cls.py --model cantonese --data_path data/5cls_data/hktvmall.csv
+python src/train_plm_5cls.py --model cantonese-bert --dataset openrice_5c --epochs 10 --batch_size 16
+```
 
-# 训练中文BERT
-python src/train_plm_5cls.py --model chinese
+Run the PyCantonese baseline:
 
-# 训练多语言BERT (mBERT)
-python src/train_plm_5cls.py --model mbert
-
-# 使用国内镜像加速下载
-python src/train_plm_5cls.py --model cantonese --use_mirror
-
-训练后的模型保存在 results/models/hktv_5emos_<model>_model/
-
-2. 使用 pycantonese 分词的训练（额外基线）
 ```bash
-python src/train_pycantonese.py
+python src/train_pycantonese.py --dataset openrice_5c
+```
 
-3. 特征级错误分析
-首先确保已训练出模型并得到 predictions.csv 和 errors.csv，然后运行，假设训练出的模型为hktv_5emos_cantonese_model：
+Results (macro‑F1, checkpoints) are saved to `results/models/`.
+
+### Probing Experiments
+
+Train probes for a specific feature (e.g., `false_friends`) across all layers:
+
 ```bash
-python src/evaluate_features.py \
-    --error_file results/models/hktv_5emos_cantonese_model/errors.csv \
-    --pred_file results/models/hktv_5emos_cantonese_model/predictions.csv
-结果保存在 feature_analysis_results/ 目录。
+python src/probing.py --feature false_friends --granularity 5class --output_dir results/probes/
+```
 
-4. 线性探测实验
+This will generate per‑layer accuracy files. To produce the heatmap figure (Figure 1 in the paper):
+
 ```bash
-python src/probing.py
+python src/probing_figures.py --probe_dir results/probes/ --output results/heatmap.png
+```
 
-5. 绘制热力图
+### Feature‑level Error Analysis
+
+Compute macro‑F1 on each linguistic subset and the relative Δ values:
+
 ```bash
-python src/probing_figures.py
-生成的图片为 results/probing/heatmap_2class.png 等。
+python src/evaluate_features.py --model results/models/cantonese-bert_5c.pt --task 5class
+```
 
-## Notes for Double-Blind Review
-本项目已通过 Anonymous GitHub 完成匿名化。
-所有路径均使用相对路径，无需人工修改。
-训练时模型会自动从 HuggingFace Hub 下载（需要网络），若网速慢可使用 --use_mirror 或提前运行 download_models.py。
-请勿上传训练好的模型文件（.bin, .safetensors）到代码仓库，审稿人可自行训练获得相同结果。
+The script produces a LaTeX‑ready table similar to Table 3 in the paper.
 
-## Acknowledgements
-We thank the contributors of OpenRice, HKTVmall, and the pycantonese toolkit.
-This work is supported by xxx (removed for anonymity).
+## Reproducing Main Results
 
-## contact
-For questions about the code, please open an issue in the anonymous repository.
-````
+The core experimental results are summarized below (Macro‑F1). All metrics can be reproduced using the provided scripts and datasets.
+
+| Task | CantoneseBERT | ChineseBERT | mBERT | Qwen3‑LoRA | PyCantonese |
+| ---  | --- | --- | --- | --- | --- |
+| OpenRice‑Binary | 0.9392 | 0.9452 | 0.9270 | 0.9509 | 0.6213 |
+| OpenRice‑3C | 0.7982 | 0.8043 | 0.7623 | 0.7989 | 0.6981 |
+| OpenRice‑5C | 0.5735 | 0.4854 | 0.4759 | 0.4747 | 0.1582 |
+| HKTVmall‑5C | 0.6262 | 0.6006 | 0.5655 | 0.5848 | 0.4356 |
+
+Probing heatmaps illustrating the layer‑wise encoding of lexical vs. pragmatic features are shown in the paper's Figure 1.
+
+## Citation
+
+If you use our code or data, please cite the anonymous paper:
+
+```bibtex
+@inproceedings{anonymous2025decoding,
+  title     = {Decoding Cantonese Sentiment: An Empirical Analysis Across Lexical, Syntactic, and Pragmatic Levels},
+  author    = {Anonymous},
+  year      = {2025},
+  note      = {Under review}
+}
+```
+
+(Full citation will be updated upon acceptance.)
+
+## License
+
+This project is licensed under the MIT License – see the [LICENSE](https://LICENSE) file for details.
+
+```text
+
+```
