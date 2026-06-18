@@ -1,62 +1,65 @@
 import pandas as pd
-import seaborn as sns
 import matplotlib.pyplot as plt
+import seaborn as sns
 import matplotlib
+
 matplotlib.use('Agg')
+plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
 
-df = pd.read_csv("./results/probing/probing_final_results.csv")
+# 读取数据
+df = pd.read_csv("project/results/probing_full/all_layers_results.csv")
+df['Layer'] = df['Layer'].astype(int)
 
-feature_order = [
-    "词汇层_一词多义",
-    "词汇层_极性修饰词",
-    "句法层_否定句式",
-    "句法层_比较句式",
-    "语用层_句末语气词",
-    "语用层_中英夹杂",
-    "语用层_粤式反讽"
-]
+# 计算总体 Precision
+df['Avg_Precision'] = (df['Pos_P'] + df['Neg_P']) / 2
 
-short_en = {
-    "词汇层_一词多义": "Polysemy",
-    "词汇层_极性修饰词": "Polarity Modifiers",
-    "句法层_否定句式": "Negative Structure",
-    "句法层_比较句式": "Comparative Structure",
-    "语用层_句末语气词": "SFP",
-    "语用层_中英夹杂": "Code-mix",
-    "语用层_粤式反讽": "Irony"
+# 英文任务名映射（顺序按论文层级）
+task_mapping = {
+    '词汇层_一词多义': 'Polysemy',
+    '词汇层_极性修饰词': 'Intensity',
+    '句法层_比较句式': 'Comparison',
+    '句法层_否定句式': 'Negation',
+    '语用层_句末语气词': 'UFPs',
+    '语用层_中英夹杂': 'Code-Mixing',
+    '语用层_粤式反讽': 'Irony'
 }
+task_order = list(task_mapping.values())  # 英文顺序
 
-models = ["2-Class_Model", "3-Class_Model", "5-Class_Model"]
-model_output_names = ["2class", "3class", "5class"]
+# 排除 Ollama（只有一层，不适合热力图）
+models = [m for m in df['Model'].unique() if m != 'Ollama_Embed']
 
-plt.rcParams.update({
-    'font.size': 8,
-    'axes.labelsize': 8,
-    'xtick.labelsize': 7,
-    'ytick.labelsize': 7,
-})
+for model_name in models:
+    sub = df[df['Model'] == model_name]
+    pivot = sub.pivot(index='Task', columns='Layer', values='Avg_Precision')
+    
+    # 将中文索引替换为英文
+    pivot = pivot.rename(index=task_mapping)
+    # 按英文顺序重排行
+    pivot = pivot.reindex(task_order)
+    
+    # 可选：删除全部为0的层（如果有多余空列）
+    # pivot = pivot.loc[:, (pivot != 0).any(axis=0)]
 
-for model, out_name in zip(models, model_output_names):
-    sub = df[df["Model"] == model]
-    pivot = sub.pivot(index="Task", columns="Layer", values="Accuracy")
-    pivot = pivot.reindex(feature_order)
-    pivot = pivot.reindex(columns=range(13))
-    pivot.index = [short_en[t] for t in pivot.index]
-
-    # 略微放大热力图尺寸
-    fig, ax = plt.subplots(figsize=(3.5, 3.5), dpi=150)
-    sns.heatmap(pivot, ax=ax, annot=True, fmt=".2f",
-                cmap="YlGnBu", cbar=False,
-                annot_kws={'size': 5},      # 缩小数字
-                linewidths=0.5,             # 稍微加粗格子线，帮助区分
-                vmin=0.40, vmax=0.85)
-
-    ax.set_title("")
-    ax.set_xlabel("Layer", fontsize=8)
-    ax.set_ylabel("")
-    ax.set_xticks(range(13))
-    ax.set_xticklabels(range(13), rotation=0, fontsize=7)
-
-    plt.tight_layout(pad=0.5)
-    plt.savefig(f"./results/probing/heatmap_{out_name}.png", dpi=300, bbox_inches='tight')
+    plt.figure(figsize=(12, 6))
+    sns.heatmap(
+        pivot,
+        annot=True,
+        fmt='.2f',
+        cmap='Blues',
+        vmin=0,
+        vmax=1,
+        cbar_kws={'label': 'Avg Precision'},
+        linewidths=0.5,
+        linecolor='white',
+        annot_kws={'size': 6}
+    )
+    plt.title(f'{model_name} - Average Precision across Layers', fontsize=14)
+    plt.xlabel('Layer', fontsize=12)
+    plt.xticks(fontsize=8)            # 横轴刻度字体
+    plt.yticks(fontsize=8)            # 纵轴刻度字体
+    plt.ylabel('Linguistic Feature', fontsize=12)
+    plt.tight_layout()
+    plt.savefig(f'test.jsonl/project/results/probing_full/heatmap_{model_name}_avg_precision_en.png', dpi=300, bbox_inches='tight')
     plt.close()
+    print(f"已保存: heatmap_{model_name}_avg_precision_en.png")
