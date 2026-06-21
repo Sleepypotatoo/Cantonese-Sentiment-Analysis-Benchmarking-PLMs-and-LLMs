@@ -6,16 +6,18 @@
 - 最后一层的表现
 - 跨层最佳 F1
 支持 HuggingFace 模型（BERT / RoBERTa / Qwen 等）和 Ollama 模型（单层）。
+额外保存宏平均 Precision、Recall、F1。
 """
 
 import os
+import random
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import precision_recall_fscore_support
+from sklearn.metrics import precision_recall_fscore_support, accuracy_score
 from transformers import AutoTokenizer, AutoModel
 import ollama
 from tqdm import tqdm
@@ -27,12 +29,14 @@ BATCH_SIZE = 8                     # 特征提取批次（显存有限可调小�
 PROBE_BATCH_SIZE = 32
 PROBE_EPOCHS = 15
 PROBE_LR = 1e-3
-EARLY_STOP_PATIENCE = 3
-
+EARLY_STOP_PATIENCE = 5
+torch.manual_seed(42)
+np.random.seed(42)
+random.seed(42)
 # 模型配置
 MODELS = {
-    "Qwen2.5-3B": {
-        "path": "Qwen2.5-3B",          
+    "Qwen3-4B": {
+        "path": "Qwen3-4B",          # HuggingFace 官方 ID，或改为本地路径
         "use_ollama": False,
         "dtype": torch.float16              # 使用半精度省显存
     },
@@ -51,14 +55,10 @@ MODELS = {
         "use_ollama": False,
         "dtype": torch.float32
     },
-    # Ollama 模型示例（单层）
-    # "Ollama_Embed": {
-    #     "path": "nomic-embed-text",
-    #     "use_ollama": True
-    # }
+
 }
 
-DATA_ROOT = "project/probing_data/"
+DATA_ROOT = "probing_data/"
 CATEGORIES = {
     "词汇层_一词多义": "词汇层_hktv_false friend.csv",
     "词汇层_极性修饰词": "词汇层_hk_极性修饰.csv",
@@ -69,7 +69,7 @@ CATEGORIES = {
     "语用层_粤式反讽": "语用层_hk_粤式反讽_train.csv",
 }
 
-OUTPUT_DIR = "test.jsonl/project/results/probing_full/"
+OUTPUT_DIR = "results/probing_full/"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ======================== 工具函数 ========================
@@ -184,9 +184,20 @@ def evaluate_probe(probe, test_feats, test_labels):
         preds = torch.argmax(logits, dim=1).cpu().numpy()
         targets = test_labels.numpy()
     p, r, f1, _ = precision_recall_fscore_support(targets, preds, labels=[0,1], average=None, zero_division=0)
+    acc = accuracy_score(targets, preds)
+
+    # 宏平均指标
+    macro_p = (p[0] + p[1]) / 2
+    macro_r = (r[0] + r[1]) / 2
+    macro_f1 = np.mean(f1)
+
     return {
         'neg_prec': p[0], 'neg_rec': r[0], 'neg_f1': f1[0],
-        'pos_prec': p[1], 'pos_rec': r[1], 'pos_f1': f1[1]
+        'pos_prec': p[1], 'pos_rec': r[1], 'pos_f1': f1[1],
+        'accuracy': acc,
+        'macro_p': macro_p,
+        'macro_r': macro_r,
+        'macro_f1': macro_f1
     }
 
 # ======================== 主流程 ========================
@@ -205,7 +216,6 @@ def main():
         # --- 加载模型（仅一次） ---
         if use_ollama:
             print("使用 Ollama 模式（单层）")
-            # 验证 Ollama 服务
             try:
                 _ = ollama.embed(model=model_path, input=["test"])
                 print("Ollama 服务连接正常")
@@ -219,12 +229,21 @@ def main():
             tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token if tokenizer.eos_token else '[PAD]'
-            model = AutoModel.from_pretrained(
-                model_path,
-                trust_remote_code=True,
-                torch_dtype=dtype,
-                device_map="auto" if DEVICE.type == 'cuda' else None
-            ).to(DEVICE)
+
+            if DEVICE.type == 'cuda':
+                model = AutoModel.from_pretrained(
+                    model_path,
+                    trust_remote_code=True,
+                    dtype=dtype,
+                    device_map="auto"
+                )
+            else:
+                model = AutoModel.from_pretrained(
+                    model_path,
+                    trust_remote_code=True,
+                    dtype=dtype
+                ).to(DEVICE)
+
             model.eval()
             for p in model.parameters():
                 p.requires_grad = False
@@ -248,19 +267,27 @@ def main():
                 train_texts, train_labels, test_size=0.1, random_state=42, stratify=train_labels
             )
 
+            print(f"训练集: 0类={sum(1 for x in train_labels if x==0)}, 1类={sum(1 for x in train_labels if x==1)}")
+            print(f"验证集: 0类={sum(1 for x in val_labels if x==0)}, 1类={sum(1 for x in val_labels if x==1)}")
+            print(f"测试集: 0类={sum(1 for x in test_labels if x==0)}, 1类={sum(1 for x in test_labels if x==1)}")
+
             # --- 提取特征 ---
             if use_ollama:
                 train_feats, hidden_dim = extract_ollama_features(model_path, train_texts)
                 val_feats, _ = extract_ollama_features(model_path, val_texts)
                 test_feats, _ = extract_ollama_features(model_path, test_texts)
-                # 训练一个探针（单层）
+
                 probe = train_probe(train_feats, torch.tensor(train_labels),
                                     val_feats, torch.tensor(val_labels), hidden_dim)
                 metrics = evaluate_probe(probe, test_feats, torch.tensor(test_labels))
                 row = {
-                    'Model': model_label, 'Task': cat_name, 'Layer': -1,
+                    'Model': model_label, 'Task': cat_name, 'Layer': -1,   # Ollama 无层概念
                     'Neg_P': metrics['neg_prec'], 'Neg_R': metrics['neg_rec'], 'Neg_F1': metrics['neg_f1'],
-                    'Pos_P': metrics['pos_prec'], 'Pos_R': metrics['pos_rec'], 'Pos_F1': metrics['pos_f1']
+                    'Pos_P': metrics['pos_prec'], 'Pos_R': metrics['pos_rec'], 'Pos_F1': metrics['pos_f1'],
+                    'Accuracy': metrics['accuracy'],
+                    'Macro_P': metrics['macro_p'],
+                    'Macro_R': metrics['macro_r'],
+                    'Macro_F1': metrics['macro_f1']
                 }
                 all_results.append(row)
             else:
@@ -286,7 +313,11 @@ def main():
                     row = {
                         'Model': model_label, 'Task': cat_name, 'Layer': layer_idx,
                         'Neg_P': metrics['neg_prec'], 'Neg_R': metrics['neg_rec'], 'Neg_F1': metrics['neg_f1'],
-                        'Pos_P': metrics['pos_prec'], 'Pos_R': metrics['pos_rec'], 'Pos_F1': metrics['pos_f1']
+                        'Pos_P': metrics['pos_prec'], 'Pos_R': metrics['pos_rec'], 'Pos_F1': metrics['pos_f1'],
+                        'Accuracy': metrics['accuracy'],
+                        'Macro_P': metrics['macro_p'],
+                        'Macro_R': metrics['macro_r'],
+                        'Macro_F1': metrics['macro_f1']
                     }
                     all_results.append(row)
 
@@ -307,21 +338,24 @@ def main():
     # 汇总表格
     df_last = df_all.loc[df_all.groupby(['Model', 'Task'])['Layer'].idxmax()]
     print("\n" + "="*80)
-    print("【最后一层】各模型在各任务上的正负例 F1")
+    print("【最后一层】各模型在各任务上的正负例 F1 及宏平均")
     print("="*80)
-    print(df_last[['Model', 'Task', 'Neg_F1', 'Pos_F1']].to_string(index=False))
+    print(df_last[['Model', 'Task', 'Neg_F1', 'Pos_F1', 'Macro_P', 'Macro_R', 'Macro_F1', 'Accuracy']].to_string(index=False))
 
     df_best = df_all.groupby(['Model', 'Task']).agg({
         'Neg_F1': 'max', 'Pos_F1': 'max',
         'Neg_P': 'max', 'Pos_P': 'max',
-        'Neg_R': 'max', 'Pos_R': 'max'
+        'Neg_R': 'max', 'Pos_R': 'max',
+        'Accuracy': 'max',
+        'Macro_P': 'max',
+        'Macro_R': 'max',
+        'Macro_F1': 'max'
     }).reset_index()
     print("\n" + "="*80)
     print("【跨层最佳】各模型在各任务上正负例 F1 的最大值（分别从不同层选取）")
     print("="*80)
-    print(df_best[['Model', 'Task', 'Neg_F1', 'Pos_F1']].to_string(index=False))
+    print(df_best[['Model', 'Task', 'Neg_F1', 'Pos_F1', 'Macro_P', 'Macro_R', 'Macro_F1', 'Accuracy']].to_string(index=False))
 
-    print(f"\n所有结果已保存至 {OUTPUT_DIR}")
 
 if __name__ == "__main__":
     main()
